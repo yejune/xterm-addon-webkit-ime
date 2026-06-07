@@ -1,0 +1,64 @@
+{
+  "name": "xterm-addon-webkit-ime",
+  "version": "0.1.0",
+  "description": "xterm.js addon that fixes Korean/CJK IME input on WKWebView (Tauri, Safari). Handles both the insertReplacementText and insertCompositionText variants, with a cursor-anchored composition preview and composition backspace.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "xterm",
+    "xterm.js",
+    "xterm-addon",
+    "ime",
+    "hangul",
+    "korean",
+    "cjk",
+    "wkwebview",
+    "tauri",
+    "safari",
+    "webkit",
+    "composition"
+  ],
+  "license": "MIT",
+  "author": "min-median-max",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/min-median-max/xterm-addon-webkit-ime.git"
+  },
+  "bugs": {
+    "url": "https://github.com/min-median-max/xterm-addon-webkit-ime/issues"
+  },
+  "homepage": "https://github.com/min-median-max/xterm-addon-webkit-ime#readme",
+  "peerDependencies": {
+    "@xterm/xterm": ">=5.0.0",
+    "xterm": ">=5.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@xterm/xterm": {
+      "optional": true
+    },
+    "xterm": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0"
+  }
+}
