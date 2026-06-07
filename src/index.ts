@@ -25,7 +25,7 @@
 // This file declares its own minimal structural types so it does not depend on a
 // specific xterm version — works with xterm 5.x ("xterm") and 6.x ("@xterm/xterm").
 //
-// ── Three WKWebView composition boundary guards ─────────────────────────────
+// ── Four WKWebView composition boundary guards ──────────────────────────────
 //
 // Verified on a real device: Tauri 2 WKWebView, macOS, Korean 2-set Dubeolsik,
 // xterm 6.0. WKWebView's event order is non-intuitive — for each composing
@@ -61,8 +61,19 @@
 //     matching input event is consumed once. It is cleared on the next
 //     keydown(229) so a legitimate same-syllable retype still delivers.
 //
-// Each guard is one-shot and exact-match: ASCII latency, multi-char pastes, and
-// legitimate inputs (ㅋㅋㅋ, retypes) are unaffected.
+//   GUARD 4 (own Backspace while composing): while a syllable is pending the IME
+//     consumes Backspace to shrink the composition, but xterm's keydown handler
+//     ALSO synthesizes \x7f via onData — the pty then deletes the already
+//     committed previous char too (two chars vanish per press). _customKey
+//     returns false for keyCode 8 while _pending is non-empty so xterm never
+//     synthesizes the DEL; the native textarea event still reaches the IME, so
+//     deleteContentBackward shrinks the composition. shouldSkip also drops
+//     \x7f / \b while pending as a belt-and-braces fallback. Once composition
+//     empties the next Backspace passes through — exactly one owner at a time.
+//
+// The guards are one-shot / exact-match (G1-G3) or strictly _pending-scoped
+// (G4): ASCII latency, multi-char pastes, and legitimate inputs (ㅋㅋㅋ, retypes,
+// post-composition Backspace) are unaffected.
 // ============================================================================
 
 export interface IDisposable {
@@ -200,6 +211,13 @@ export class WebkitImeAddon implements ITerminalAddon {
 
   /** Call from terminal.onData — true if the data is leaked jamo to drop. */
   public shouldSkip(data: string): boolean {
+    // GUARD 4 (belt-and-braces): _customKey already returns false for Backspace
+    // while _pending is non-empty, so xterm should never synthesize \x7f / \b
+    // during composition. But if any path still emits it (a fallback xterm
+    // handler, a future xterm version, a test harness), drop it here too while a
+    // syllable is pending. Tied to _pending — the moment composition empties the
+    // next Backspace reaches the pty normally, so there is no one-shot state.
+    if ((data === "\x7f" || data === "\b") && this._pending !== "") return true;
     // GUARD 1: a single Hangul jamo is ALWAYS noise — drop it regardless of
     // _composing. keydown(229) fires AFTER this onData, so _composing may still
     // be false for the first jamo of a post-space word; an unconditional drop is
@@ -222,6 +240,18 @@ export class WebkitImeAddon implements ITerminalAddon {
   private _customKey = (ev: KeyboardEvent): boolean => {
     if (ev.type === "keydown" && (ev.keyCode === 229 || ev.isComposing)) {
       return false; // block xterm's keydown processing for IME keys
+    }
+    // GUARD 4: while a syllable is being composed (_pending is non-empty),
+    // Backspace belongs entirely to the IME. Return false so xterm never
+    // synthesizes \x7f (DEL) via onData — otherwise the pty deletes the already
+    // committed previous char while the IME also shrinks the pending syllable
+    // (two chars vanish per press). The native textarea event still reaches
+    // WebKit's IME, which fires deleteContentBackward to shrink/clear the
+    // composition (handled by _onKeydown/_onInput). Once _pending is empty the
+    // next Backspace must reach the pty normally, so we block only while the
+    // composition has content — exactly one owner at any moment.
+    if (ev.type === "keydown" && ev.keyCode === 8 && this._pending !== "") {
+      return false;
     }
     return true;
   };
