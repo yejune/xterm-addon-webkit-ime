@@ -24,6 +24,45 @@
 //
 // This file declares its own minimal structural types so it does not depend on a
 // specific xterm version — works with xterm 5.x ("xterm") and 6.x ("@xterm/xterm").
+//
+// ── Three WKWebView composition boundary guards ─────────────────────────────
+//
+// Verified on a real device: Tauri 2 WKWebView, macOS, Korean 2-set Dubeolsik,
+// xterm 6.0. WKWebView's event order is non-intuitive — for each composing
+// keystroke the engine fires beforeinput -> input -> terminal.onData BEFORE the
+// keydown(229) marker. Captured ground truth:
+//
+//   beforeinput(insertText "대")   ← addon can record echo expectation here
+//   onData("대")                   ← xterm textarea poll echoes the char
+//   input(insertText "대")         ← addon processes the composition
+//   keydown(229)                   ← IME-active marker, LAST
+//
+// Because keydown is last, any guard that keys off _composing being set in
+// keydown(229) cannot gate the very first onData of a new session.
+//
+//   GUARD 1 (bare-jamo skip): a single Hangul *jamo* (NOT a composed syllable)
+//     arriving via terminal.onData is ALWAYS noise — a mid-composition poll
+//     artifact or the first jamo of a new word after a space, where _composing
+//     is still false. shouldSkip drops it unconditionally. Legitimate lone-jamo
+//     (the ㅋ in "ㅋㅋㅋ") reaches the pty via _flush() -> onData, bypassing
+//     shouldSkip entirely, so nothing is lost.
+//
+//   GUARD 2 (resyllabification echo dedup): at a syllable boundary like 읻+ㅐ
+//     -> 이|대 the new syllable arrives as a full-syllable insertText. xterm
+//     echoes it via onData before the previous syllable flushes, reversing the
+//     order ("이대로" -> "대이로대로"). beforeinput records the single Hangul
+//     char; shouldSkip drops the matching onData exactly once.
+//
+//   GUARD 3 (post-flush delayed-commit consumption): a terminator key (?, Enter,
+//     space) flushes the pending syllable synchronously in keydown. WKWebView
+//     then delivers a *delayed* composition-commit input event for the same
+//     syllable AFTER the keydown — _onInput would otherwise re-buffer it,
+//     producing a "가?가" tail. The flushed syllable is recorded and the
+//     matching input event is consumed once. It is cleared on the next
+//     keydown(229) so a legitimate same-syllable retype still delivers.
+//
+// Each guard is one-shot and exact-match: ASCII latency, multi-char pastes, and
+// legitimate inputs (ㅋㅋㅋ, retypes) are unaffected.
 // ============================================================================
 
 export interface IDisposable {
@@ -67,6 +106,22 @@ function isHangul(text: string): boolean {
   );
 }
 
+// True only for a single Hangul *jamo* (conjoining or compatibility), NOT for a
+// fully composed syllable (U+AC00–U+D7AF). Drives GUARD 1: a bare jamo in
+// terminal.onData is always noise, while composed syllables go through the
+// resyllabification echo guard (GUARD 2) instead.
+function isHangulJamo(text: string): boolean {
+  if (!text) return false;
+  const cp = text.codePointAt(0) ?? 0;
+  return (
+    (cp >= 0x1100 && cp <= 0x11ff) || // Hangul Jamo (conjoining)
+    (cp >= 0x3130 && cp <= 0x318f) || // Hangul Compatibility Jamo
+    (cp >= 0xa960 && cp <= 0xa97f) || // Hangul Jamo Extended-A
+    (cp >= 0xd7b0 && cp <= 0xd7ff) // Hangul Jamo Extended-B
+    // U+AC00–U+D7AF (Hangul Syllables) intentionally excluded.
+  );
+}
+
 export class WebkitImeAddon implements ITerminalAddon {
   private _term?: ITerminalLike;
   private _preedit?: HTMLDivElement;
@@ -76,6 +131,15 @@ export class WebkitImeAddon implements ITerminalAddon {
   // never sets these — it is fully owned by xterm.
   private _composing = false;
   private _pending = "";
+  // GUARD 2 (resyllabification echo dedup): the single Hangul char seen on the
+  // most recent IME beforeinput. shouldSkip drops the matching onData once.
+  private _expectEcho = "";
+  // GUARD 3 (post-flush delayed-commit): the syllable just flushed from a
+  // keydown terminator. _onInput consumes the matching delayed commit once.
+  private _justFlushed = "";
+  // True only while _flush() runs inside _onKeydown, so the flush knows it must
+  // arm GUARD 3 (a standard-path flush from _onInput must not).
+  private _flushingFromKeydown = false;
 
   constructor(private readonly _opts: WebkitImeAddonOptions) {}
 
@@ -106,6 +170,9 @@ export class WebkitImeAddon implements ITerminalAddon {
     // We only intercept the non-standard input variants.
     add("input", this._onInput as (e: Event) => void);
     add("keydown", this._onKeydown as (e: Event) => void);
+    // GUARD 2: beforeinput arrives before the xterm textarea poll onData, so it
+    // is the only place to record the echo expectation.
+    add("beforeinput", this._onBeforeinput as (e: Event) => void);
 
     // Block xterm's CompositionHelper from sending partial jamo on keyCode 229.
     terminal.attachCustomKeyEventHandler(this._customKey);
@@ -126,10 +193,29 @@ export class WebkitImeAddon implements ITerminalAddon {
     this._term?.attachCustomKeyEventHandler(() => true);
     this._composing = false;
     this._pending = "";
+    this._expectEcho = "";
+    this._justFlushed = "";
+    this._flushingFromKeydown = false;
   }
 
   /** Call from terminal.onData — true if the data is leaked jamo to drop. */
   public shouldSkip(data: string): boolean {
+    // GUARD 1: a single Hangul jamo is ALWAYS noise — drop it regardless of
+    // _composing. keydown(229) fires AFTER this onData, so _composing may still
+    // be false for the first jamo of a post-space word; an unconditional drop is
+    // the only thing that closes the inter-word leak. Legitimate lone-jamo (ㅋ)
+    // reaches the pty via _flush() -> onData, never through this path.
+    if (data.length === 1 && isHangulJamo(data)) return true;
+    // GUARD 2: resyllabification echo. beforeinput recorded the incoming single
+    // Hangul char; drop the matching onData once so the new syllable does not
+    // leak ahead of the ordered flush of the previous one. Applies to jamo and
+    // composed syllables; multi-char paste never matches (_expectEcho is always
+    // a single char).
+    if (data.length === 1 && isHangul(data) && data === this._expectEcho) {
+      this._expectEcho = "";
+      return true;
+    }
+    // Mid-composition jamo that still leaks through (original behavior).
     return this._composing && data.length === 1 && isHangul(data);
   }
 
@@ -145,6 +231,9 @@ export class WebkitImeAddon implements ITerminalAddon {
 
     if (e.keyCode === 229 || e.isComposing) {
       // Block CompositionHelper._handleAnyTextareaChanges (partial jamo leak).
+      // A new IME session proves the GUARD 3 post-flush window has passed, so a
+      // legitimate same-syllable retype is delivered rather than swallowed.
+      this._justFlushed = "";
       e.stopImmediatePropagation();
       return;
     }
@@ -161,14 +250,56 @@ export class WebkitImeAddon implements ITerminalAddon {
     }
 
     // Any other key ends a non-standard composition: flush it, then let xterm
-    // handle the key normally (no preventDefault) so it reaches onData.
-    if (this._composing) this._flush();
+    // handle the key normally (no preventDefault) so it reaches onData. Mark the
+    // flush as keydown-originated so GUARD 3 arms for the delayed commit.
+    if (this._composing) {
+      this._flushingFromKeydown = true;
+      this._flush();
+      this._flushingFromKeydown = false;
+    }
+  };
+
+  private _onBeforeinput = (e: InputEvent): void => {
+    // GUARD 2: record the incoming single Hangul char so shouldSkip can suppress
+    // the matching xterm textarea-poll onData that fires between this beforeinput
+    // and the following input event. Only IME writes (insertText /
+    // insertReplacementText) of exactly one Hangul code point qualify — multi-char
+    // paste of Korean text must reach the pty untouched.
+    if (
+      e.data !== null &&
+      e.data.length === 1 &&
+      isHangul(e.data) &&
+      (e.inputType === "insertText" || e.inputType === "insertReplacementText")
+    ) {
+      this._expectEcho = e.data;
+    } else {
+      // Clear a stale expectation on any non-qualifying beforeinput so an
+      // unrelated event cannot cause a false-positive suppression later.
+      this._expectEcho = "";
+    }
   };
 
   private _onInput = (e: InputEvent): void => {
     this._opts.onDebug?.(
       `INPUT type=${e.inputType} data=${JSON.stringify(e.data)} composing=${this._composing} pending=${JSON.stringify(this._pending)}`,
     );
+
+    // GUARD 3: WKWebView delivers a delayed composition-commit input event for a
+    // syllable already flushed by a keydown terminator. Consume it silently — do
+    // NOT start a new composition. WKWebView may use insertText or
+    // insertReplacementText for the commit.
+    if (
+      e.data !== null &&
+      e.data === this._justFlushed &&
+      (e.inputType === "insertText" || e.inputType === "insertReplacementText")
+    ) {
+      this._justFlushed = "";
+      e.stopImmediatePropagation();
+      e.preventDefault();
+      return;
+    }
+    // Any non-matching input ends the post-flush window so the guard never lingers.
+    if (this._justFlushed) this._justFlushed = "";
 
     // NON-STANDARD: composition update (ㅎ -> 하 -> 한). Intercept + preview.
     if (e.data && e.inputType === "insertReplacementText") {
@@ -250,6 +381,12 @@ export class WebkitImeAddon implements ITerminalAddon {
     this._composing = false;
     this._pending = "";
     this._hide();
-    if (text) this._opts.onData(text);
+    if (text) {
+      // GUARD 3: only a keydown-originated flush (a non-IME terminator key) is
+      // followed by a delayed commit. A standard-path flush from _onInput is
+      // already followed by correct input processing, so it must not arm.
+      if (this._flushingFromKeydown) this._justFlushed = text;
+      this._opts.onData(text);
+    }
   }
 }
