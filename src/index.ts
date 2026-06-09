@@ -241,6 +241,29 @@ export class WebkitImeAddon implements ITerminalAddon {
     if (ev.type === "keydown" && (ev.keyCode === 229 || ev.isComposing)) {
       return false; // block xterm's keydown processing for IME keys
     }
+    // GUARD 5 (companion): while a syllable is pending, the terminator / control
+    // keys are owned by _onKeydown, which flushes the syllable and emits the
+    // control char itself. WKWebView delivers these keys with isComposing=FALSE,
+    // so the check above does NOT block them — without this, xterm ALSO processes
+    // the key and emits a premature control char. For Enter that means a \r is
+    // sent BEFORE the pending syllable is flushed, executing the already-flushed
+    // previous syllable: "한글"+Enter splits into "한"⏎ "글"⏎. Block xterm here so
+    // only _onKeydown emits the terminator.
+    if (ev.type === "keydown" && this._pending !== "") {
+      if (ev.key === "Enter" || ev.key === "Tab" || ev.key === "Escape") {
+        return false;
+      }
+      if (
+        ev.ctrlKey &&
+        !ev.metaKey &&
+        !ev.altKey &&
+        ev.key.length === 1 &&
+        ev.key >= "a" &&
+        ev.key <= "z"
+      ) {
+        return false;
+      }
+    }
     // GUARD 4: while a syllable is being composed (_pending is non-empty),
     // Backspace belongs entirely to the IME. Return false so xterm never
     // synthesizes \x7f (DEL) via onData — otherwise the pty deletes the already
@@ -257,7 +280,48 @@ export class WebkitImeAddon implements ITerminalAddon {
   };
 
   private _onKeydown = (e: KeyboardEvent): void => {
-    this._opts.onDebug?.(`KEY key=${JSON.stringify(e.key)} code=${e.keyCode} composing=${this._composing}`);
+    this._opts.onDebug?.(`KEY key=${JSON.stringify(e.key)} code=${e.keyCode} composing=${this._composing} isComposing=${e.isComposing}`);
+
+    // GUARD 5: terminator / control key (Enter / Tab / Escape / Ctrl+A..Z) pressed
+    // WHILE a non-standard syllable is pending. WKWebView fires these with
+    // isComposing=true, so they used to fall into the IME early-return below and
+    // get swallowed — the pending syllable was never flushed and the control char
+    // was lost. Symptoms: "안녕하세요"+Enter sent only "안녕하세" and left "요"
+    // composing (a second Enter was needed); Ctrl+C mid-composition could not
+    // abort a running command. Commit the pending syllable here (arming GUARD 3
+    // for any delayed commit) and emit the control char ourselves, because
+    // _customKey blocks xterm from processing IME-composing keys. Gated on
+    // _composing + the exact keys, so space and ordinary keys keep their existing
+    // behavior. (Arrow/Home/End/PageUp during composition still swallowed — those
+    // need full xterm key-sequence encoding and are left as a known limitation.)
+    let emit: string | null = null;
+    if (this._composing) {
+      if (e.key === "Enter") emit = "\r";
+      else if (e.key === "Tab") emit = "\t";
+      else if (e.key === "Escape") emit = "\x1b";
+      else if (
+        e.ctrlKey &&
+        !e.metaKey &&
+        !e.altKey &&
+        e.key.length === 1 &&
+        e.key >= "a" &&
+        e.key <= "z"
+      ) {
+        // Ctrl+A..Z -> \x01..\x1A (Ctrl+C = \x03, Ctrl+D = \x04, Ctrl+Z = \x1A).
+        // Without this, an interrupt typed mid-composition is swallowed by the IME
+        // early-return below and the running command cannot be aborted.
+        emit = String.fromCharCode(e.key.charCodeAt(0) - 96);
+      }
+    }
+    if (emit !== null) {
+      this._flushingFromKeydown = true;
+      this._flush();
+      this._flushingFromKeydown = false;
+      this._opts.onData(emit);
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      return;
+    }
 
     if (e.keyCode === 229 || e.isComposing) {
       // Block CompositionHelper._handleAnyTextareaChanges (partial jamo leak).
