@@ -37,9 +37,13 @@ const ime = new WebkitImeAddon({
 term.loadAddon(ime);
 
 // Route xterm's own data (standard composition, plain keys) through the same
-// sink, and use shouldSkip() to drop any jamo that leaks mid-composition.
+// sink. shouldSkip() drops jamo that leaks mid-composition; flushPending()
+// commits a pending syllable before the external char so order is preserved
+// ("자" + "." -> "자.", not ".자").
 term.onData((data) => {
-  if (!ime.shouldSkip(data)) sendToPty(data);
+  if (ime.shouldSkip(data)) return;
+  ime.flushPending();
+  sendToPty(data);
 });
 ```
 
@@ -53,7 +57,9 @@ const sendToPty = (data: string) => void invoke("async_write_to_pty", { data });
 const ime = new WebkitImeAddon({ onData: sendToPty });
 term.loadAddon(ime);
 term.onData((data) => {
-  if (!ime.shouldSkip(data)) sendToPty(data);
+  if (ime.shouldSkip(data)) return;
+  ime.flushPending();
+  sendToPty(data);
 });
 ```
 
@@ -75,6 +81,8 @@ new WebkitImeAddon(options: {
 });
 
 ime.shouldSkip(data: string): boolean;  // call from term.onData to drop leaked jamo
+ime.flushPending(): void;               // call from term.onData before a non-skipped
+                                        // chunk so a pending syllable is ordered first
 ime.dispose(): void;
 ```
 
