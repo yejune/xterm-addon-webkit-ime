@@ -42,7 +42,7 @@ term.loadAddon(ime);
 // ("자" + "." -> "자.", not ".자").
 term.onData((data) => {
   if (ime.shouldSkip(data)) return;
-  ime.flushPending();
+  if (ime.shouldFlushPending(data)) ime.flushPending();
   sendToPty(data);
 });
 ```
@@ -63,7 +63,7 @@ const ime = new WebkitImeAddon({ onData: sendToPty });
 term.loadAddon(ime);
 term.onData((data) => {
   if (ime.shouldSkip(data)) return;
-  ime.flushPending();
+  if (ime.shouldFlushPending(data)) ime.flushPending();
   sendToPty(data);
 });
 ```
@@ -94,7 +94,7 @@ const ime = new WebkitImeAddon({ onData: sendToPty });
 term.loadAddon(ime);
 term.onData((data) => {
   if (ime.shouldSkip(data)) return;
-  ime.flushPending();
+  if (ime.shouldFlushPending(data)) ime.flushPending();
   sendToPty(data);
 });
 ```
@@ -121,7 +121,8 @@ new WebkitImeAddon(options: {
 });
 
 ime.shouldSkip(data: string): boolean;  // call from term.onData to drop leaked jamo
-ime.flushPending(): void;               // call from term.onData before a non-skipped
+ime.shouldFlushPending(data: string): boolean; // false for terminal protocol replies
+ime.flushPending(): void;               // call before forwarding user-originated data
                                         // chunk so a pending syllable is ordered first
 ime.dispose(): void;
 ```
