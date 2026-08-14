@@ -131,6 +131,9 @@ ime.dispose(): void;
 
 - **Standard variant** → delegated to xterm (its `CompositionHelper` already handles `insertCompositionText`/`insertFromComposition`). The addon stays out of the way and reads the result via `term.onData`.
 - **Non-standard variant** → `insertReplacementText` / Hangul `insertText` are intercepted, buffered, and previewed in an underlined overlay at the cursor cell. The composed syllable is flushed to `onData` on the next non-IME key, a new composition, or a plain character.
+- Once the addon owns a non-standard input event, it clears xterm's hidden
+  textarea. This prevents WebKit marked text from accumulating beside a TUI's
+  own rendered input while the addon preview remains the sole preedit owner.
 - **`keyCode 229`** is blocked (via `attachCustomKeyEventHandler` + capture-phase `stopImmediatePropagation`) so xterm's `CompositionHelper` does not emit partial jamo.
 - **Backspace during a non-standard composition**: a single jamo that the IME can no longer decompose emits no further input event, so the addon clears the buffer itself.
 

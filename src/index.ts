@@ -447,6 +447,7 @@ export class WebkitImeAddon implements ITerminalAddon {
     if (e.data && e.inputType === "insertReplacementText") {
       this._composing = true;
       this._pending = e.data;
+      this._clearOwnedTextarea();
       this._show(e.data);
       e.stopImmediatePropagation();
       e.preventDefault();
@@ -458,6 +459,7 @@ export class WebkitImeAddon implements ITerminalAddon {
       if (this._composing) this._flush();
       this._composing = true;
       this._pending = e.data;
+      this._clearOwnedTextarea();
       this._show(e.data);
       e.stopImmediatePropagation();
       e.preventDefault();
@@ -472,6 +474,7 @@ export class WebkitImeAddon implements ITerminalAddon {
     ) {
       this._composing = false;
       this._pending = "";
+      this._clearOwnedTextarea();
       this._hide();
       e.stopImmediatePropagation();
       e.preventDefault();
@@ -502,6 +505,11 @@ export class WebkitImeAddon implements ITerminalAddon {
     preedit.style.lineHeight = `${ch}px`;
     preedit.style.fontFamily = term.options.fontFamily ?? "monospace";
     preedit.style.fontSize = `${term.options.fontSize ?? 15}px`;
+  }
+
+  private _clearOwnedTextarea(): void {
+    const textarea = this._term?.textarea;
+    if (textarea) textarea.value = "";
   }
 
   private _show(text: string): void {
