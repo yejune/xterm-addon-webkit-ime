@@ -70,12 +70,14 @@ term.onData((data) => {
 
 ### With Wails v3
 
-Wails generates the binding import path from the Go service package. Replace the
-example path below with the path generated under your app's `frontend/bindings`.
+Wails generates the binding import path from the registered Go service package.
+This example uses the real
+[`soksak-plugin-terminal-xterm`](https://github.com/soksak-ai/soksak-plugin-terminal-xterm)
+service; Wails writes this module under the application's `frontend/bindings`.
 
 ```ts
 import * as TerminalService from
-  "../bindings/github.com/acme/app/terminal/service";
+  "../bindings/github.com/soksak-ai/soksak-plugin-terminal-xterm/service";
 
 const handle = await TerminalService.Open("terminal-1", term.cols, term.rows);
 
