@@ -1,12 +1,12 @@
 # xterm-addon-webkit-ime
 
-An [xterm.js](https://xtermjs.org) addon that fixes **Korean / CJK IME input on WKWebView** (Tauri, Safari) and other engines — with a cursor-anchored composition preview and working composition backspace.
+An [xterm.js](https://xtermjs.org) addon that fixes **Korean / CJK IME input on WKWebView** (Wails, Tauri, Safari) and other engines — with a cursor-anchored composition preview and working composition backspace.
 
 No xterm fork, no patch. Drop-in addon (`term.loadAddon(...)`), works with xterm **5.x** (`xterm`) and **6.x** (`@xterm/xterm`). Zero runtime dependencies.
 
 ## The problem
 
-WKWebView (Tauri / Capacitor / Safari) does **not** fire reliable `compositionstart`/`compositionend` events for Korean IME. Instead it emits input events in one of two variants depending on its marked-text state:
+WKWebView (Wails / Tauri / Capacitor / Safari) does **not** fire reliable `compositionstart`/`compositionend` events for Korean IME. Instead it emits input events in one of two variants depending on its marked-text state:
 
 | Variant | What you see | xterm alone |
 |---|---|---|
@@ -52,7 +52,12 @@ term.onData((data) => {
 ```ts
 import { invoke } from "@tauri-apps/api";
 
-const sendToPty = (data: string) => void invoke("async_write_to_pty", { data });
+let writeTail: Promise<void> = Promise.resolve();
+const sendToPty = (data: string): void => {
+  writeTail = writeTail
+    .then(() => invoke("async_write_to_pty", { data }))
+    .catch((error) => console.error("pty write failed", error));
+};
 
 const ime = new WebkitImeAddon({ onData: sendToPty });
 term.loadAddon(ime);
@@ -63,8 +68,41 @@ term.onData((data) => {
 });
 ```
 
-> Tip: serialize your pty writes (chain the async `invoke` calls). Two quick writes
-> can otherwise race and arrive out of order (e.g. `한 글` instead of `한글 `).
+### With Wails v3
+
+Wails generates the binding import path from the Go service package. Replace the
+example path below with the path generated under your app's `frontend/bindings`.
+
+```ts
+import * as TerminalService from
+  "../bindings/github.com/acme/app/terminal/service";
+
+const handle = await TerminalService.Open("terminal-1", term.cols, term.rows);
+
+// Both the addon's finalized IME data and xterm's ordinary data must use one
+// ordered queue. A rejected write is reported and does not poison later writes.
+let writeTail: Promise<void> = Promise.resolve();
+const sendToPty = (data: string): void => {
+  writeTail = writeTail
+    .then(() => TerminalService.Write(handle, data))
+    .catch((error) => console.error("pty write failed", error));
+};
+
+const ime = new WebkitImeAddon({ onData: sendToPty });
+term.loadAddon(ime);
+term.onData((data) => {
+  if (ime.shouldSkip(data)) return;
+  ime.flushPending();
+  sendToPty(data);
+});
+```
+
+The addon is independent of Wails service registration. The application owns
+the PTY service and passes its generated `Write` binding to the addon's data
+sink. No DOM mutation or synthetic input is required.
+
+> Serialize pty writes in every framework integration. Two quick writes can
+> otherwise race and arrive out of order (e.g. `한 글` instead of `한글 `).
 
 ### Cleanup
 
