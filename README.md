@@ -2,7 +2,8 @@
 
 An [xterm.js](https://xtermjs.org) addon that fixes **Korean / CJK IME input on WKWebView** (Wails, Tauri, Safari) and other engines — with a cursor-anchored composition preview and working composition backspace.
 
-No xterm fork, no patch. Drop-in addon (`term.loadAddon(...)`), works with xterm **5.x** (`xterm`) and **6.x** (`@xterm/xterm`). Zero runtime dependencies.
+No xterm fork, no patch. Drop-in addon (`term.loadAddon(...)`) for
+`@xterm/xterm` **6.0.0**. The package does not claim an older Xterm API.
 
 ## The problem
 
@@ -17,14 +18,13 @@ This addon intercepts **only the non-standard variant**, buffers the composing s
 
 ## Install
 
-```sh
-npm install xterm-addon-webkit-ime
-```
+Consumers pin one exact Git commit in their package manifest and lockfile. This library is not
+published to a language registry.
 
 ## Usage
 
 ```ts
-import { Terminal } from "@xterm/xterm";      // or "xterm" for 5.x
+import { Terminal } from "@xterm/xterm";
 import { WebkitImeAddon } from "xterm-addon-webkit-ime";
 
 const term = new Terminal();
@@ -146,3 +146,12 @@ The underlying WebKit behaviour is tracked as [WebKit bug 274700](https://bugs.w
 ## License
 
 MIT
+
+## Verification
+
+```sh
+make verify
+```
+
+`.node-version`, `package.json#packageManager`, and `pnpm-lock.yaml` own the exact Node, pnpm,
+TypeScript and Xterm 6 inputs. The tracked `dist` output must match the same source build.
