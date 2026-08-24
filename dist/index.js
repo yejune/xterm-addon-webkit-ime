@@ -22,8 +22,9 @@
 //
 // WebKit bug: https://bugs.webkit.org/show_bug.cgi?id=274700
 //
-// This file declares its own minimal structural types so it does not depend on a
-// specific xterm version — works with xterm 5.x ("xterm") and 6.x ("@xterm/xterm").
+// This file declares the minimal Xterm 6 surface the addon consumes. The package
+// contract pins @xterm/xterm 6.0.0; the structural interface keeps private Xterm
+// internals out of this library without claiming compatibility with older APIs.
 //
 // ── Four WKWebView composition boundary guards ──────────────────────────────
 //
