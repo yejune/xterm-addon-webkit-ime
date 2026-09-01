@@ -5,7 +5,7 @@
   "engines": {
     "node": "26.7.0"
   },
-  "packageManager": "pnpm@11.22.0",
+  "packageManager": "pnpm@11.24.0",
   "description": "xterm.js addon that fixes Korean/CJK IME input on WKWebView (Wails, Tauri, Safari). Handles both the insertReplacementText and insertCompositionText variants, with a cursor-anchored composition preview and composition backspace.",
   "type": "module",
   "main": "./dist/index.js",
