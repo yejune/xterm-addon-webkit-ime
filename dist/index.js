@@ -431,7 +431,8 @@ export class WebkitImeAddon {
         return shouldFlushPendingForTerminalData(data);
     }
     _place() {
-        var _a, _b, _c, _d, _e, _f, _g;
+        var _a, _b, _c;
+        var _d, _e, _f, _g;
         const term = this._term;
         const preedit = this._preedit;
         if (!term || !preedit)
